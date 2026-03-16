@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Terminal · MP26</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #1a1a1a;
+  --bg2: #252525;
+  --border: rgba(255,255,255,0.08);
+  --text: #e8e8e8;
+  --muted: #666;
+  --green: #74c69d;
+  --blue: #90b8f8;
+  --font-mono: "SF Mono","Fira Code",Consolas,monospace;
+  --font-sans: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+html, body { width: 100%; height: 100%; background: var(--bg); color: var(--text); font-family: var(--font-sans); overflow: hidden; display: flex; flex-direction: column; }
+
+/* ── toolbar ── */
+.toolbar {
+  height: 38px;
+  background: var(--bg2);
+  border-bottom: 0.5px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  flex-shrink: 0;
+}
+.toolbar-title { font-size: 12px; font-weight: 500; color: var(--muted); font-family: var(--font-mono); flex: 1; }
+.btn {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: 0.5px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.btn:hover { color: var(--text); border-color: rgba(255,255,255,0.2); }
+.btn.active { color: var(--blue); border-color: var(--blue); }
+
+/* ── pane layout ── */
+.panes { flex: 1; display: flex; overflow: hidden; }
+#terminal-pane { flex: 1; padding: 4px; overflow: hidden; }
+#table-pane {
+  width: 0;
+  overflow: hidden;
+  border-left: 0.5px solid var(--border);
+  transition: width 0.2s;
+  display: flex;
+  flex-direction: column;
+}
+#table-pane.open { width: 50%; }
+
+/* ── table pane ── */
+.table-header {
+  height: 38px;
+  background: var(--bg2);
+  border-bottom: 0.5px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.table-header span { font-size: 11px; font-family: var(--font-mono); color: var(--muted); flex: 1; }
+.table-wrap { flex: 1; overflow: auto; padding: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: var(--font-mono); }
+thead tr { position: sticky; top: 0; background: var(--bg2); }
+th {
+  text-align: left;
+  padding: 5px 10px;
+  font-weight: 500;
+  color: var(--blue);
+  border-bottom: 0.5px solid var(--border);
+  white-space: nowrap;
+}
+td {
+  padding: 4px 10px;
+  color: var(--text);
+  border-bottom: 0.5px solid var(--border);
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+tr:hover td { background: var(--bg2); }
+.table-stats { font-size: 11px; font-family: var(--font-mono); color: var(--muted); padding: 6px 8px; border-top: 0.5px solid var(--border); flex-shrink: 0; }
+
+/* ── drop zone ── */
+body.dragover::after {
+  content: 'drop file to view as table';
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; color: var(--blue);
+  font-family: var(--font-mono);
+  pointer-events: none;
+}
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <span class="toolbar-title">MP26 · terminal</span>
+  <button class="btn" id="btn-table" onclick="toggleTable()" title="view last output as table (TSV/CSV)">table view</button>
+  <button class="btn" onclick="clearTerm()">clear</button>
+</div>
+
+<div class="panes">
+  <div id="terminal-pane"></div>
+
+  <div id="table-pane">
+    <div class="table-header">
+      <span id="table-label">no data</span>
+      <button class="btn" onclick="closeTable()">close</button>
+    </div>
+    <div class="table-wrap" id="table-wrap"></div>
+    <div class="table-stats" id="table-stats"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+<script>
+const term = new Terminal({
+  cursorBlink: true,
+  fontSize: 13,
+  fontFamily: '"SF Mono","Fira Code",Consolas,monospace',
+  theme: {
+    background: '#1a1a1a', foreground: '#e8e8e8', cursor: '#e8e8e8',
+    selectionBackground: 'rgba(144,184,248,0.25)',
+    black: '#1a1a1a', brightBlack: '#555',
+    red: '#e07070', brightRed: '#f09090',
+    green: '#74c69d', brightGreen: '#94e6bd',
+    yellow: '#f4a261', brightYellow: '#f4b281',
+    blue: '#90b8f8', brightBlue: '#b0d0f8',
+    magenta: '#c084fc', brightMagenta: '#d0a0fc',
+    cyan: '#67e8f9', brightCyan: '#87f8ff',
+    white: '#e8e8e8', brightWhite: '#ffffff',
+  },
+  scrollback: 5000,
+  allowProposedApi: true,
+});
+
+const fitAddon = new FitAddon.FitAddon();
+term.loadAddon(fitAddon);
+term.open(document.getElementById('terminal-pane'));
+fitAddon.fit();
+
+// collect output for table view
+let outputBuffer = '';
+let lastOutput = '';
+
+const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+const ws = new WebSocket(`${proto}://${location.host}/terminal-ws`);
+
+ws.onopen = () => { fitAndSend(); };
+
+ws.onmessage = (e) => {
+  term.write(e.data);
+  outputBuffer += e.data;
+};
+
+ws.onclose = () => term.writeln('\r\n\x1b[31m[disconnected]\x1b[0m');
+ws.onerror = (e) => term.writeln('\r\n\x1b[31m[connection error]\x1b[0m');
+
+term.onData((data) => {
+  if (ws.readyState === WebSocket.OPEN) {
+    // capture last command output on Enter
+    if (data === '\r') {
+      lastOutput = '';
+      outputBuffer = '';
+    }
+    ws.send(JSON.stringify({ type: 'input', data }));
+  }
+});
+
+function fitAndSend() {
+  fitAddon.fit();
+  if (ws.readyState === WebSocket.OPEN)
+    ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+}
+
+window.addEventListener('resize', fitAndSend);
+document.getElementById('table-pane').addEventListener('transitionend', fitAndSend);
+
+function clearTerm() {
+  term.clear();
+  outputBuffer = '';
+}
+
+// ── Table view ──────────────────────────────────────────────────────────────
+let tableOpen = false;
+
+function toggleTable() {
+  if (tableOpen) { closeTable(); return; }
+  // strip ANSI escape codes from buffer
+  const clean = outputBuffer.replace(/\x1b\[[0-9;]*[mGKHF]/g, '').replace(/\r/g, '');
+  const lines = clean.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  renderTable(lines);
+}
+
+function closeTable() {
+  tableOpen = false;
+  document.getElementById('table-pane').classList.remove('open');
+  document.getElementById('btn-table').classList.remove('active');
+  fitAndSend();
+}
+
+function renderTable(lines) {
+  if (!lines.length) { term.writeln('\r\n\x1b[33m[no output to view]\x1b[0m'); return; }
+
+  // detect delimiter
+  const sample = lines.slice(0, 5).join('\n');
+  const tabCount = (sample.match(/\t/g) || []).length;
+  const commaCount = (sample.match(/,/g) || []).length;
+  const sep = tabCount > commaCount ? '\t' : ',';
+  const sepName = sep === '\t' ? 'TSV' : 'CSV';
+
+  // parse
+  const rows = lines.map(l => l.split(sep));
+  const maxCols = Math.max(...rows.map(r => r.length));
+
+  // if only 1 column or less than 2 rows, not tabular
+  if (maxCols < 2 || rows.length < 2) {
+    term.writeln('\r\n\x1b[33m[output doesn\'t look like TSV/CSV]\x1b[0m');
+    return;
+  }
+
+  const header = rows[0];
+  const data   = rows.slice(1);
+
+  let html = '<table><thead><tr>';
+  header.forEach(h => { html += `<th>${esc(h)}</th>`; });
+  html += '</tr></thead><tbody>';
+  data.forEach(row => {
+    html += '<tr>';
+    for (let i = 0; i < maxCols; i++) {
+      html += `<td title="${esc(row[i] || '')}">${esc(row[i] || '')}</td>`;
+    }
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+
+  document.getElementById('table-wrap').innerHTML = html;
+  document.getElementById('table-label').textContent = `${sepName} · ${header.length} cols · ${data.length} rows`;
+  document.getElementById('table-stats').textContent = `${data.length} rows × ${header.length} columns`;
+
+  tableOpen = true;
+  document.getElementById('table-pane').classList.add('open');
+  document.getElementById('btn-table').classList.add('active');
+  fitAndSend();
+}
+
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Drag & drop file viewer ─────────────────────────────────────────────────
+document.body.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  document.body.classList.add('dragover');
+});
+document.body.addEventListener('dragleave', () => document.body.classList.remove('dragover'));
+document.body.addEventListener('drop', (e) => {
+  e.preventDefault();
+  document.body.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const lines = ev.target.result.split('\n').map(l => l.trim()).filter(l => l);
+    renderTable(lines);
+  };
+  reader.readAsText(file);
+});
+</script>
+</body>
+</html>

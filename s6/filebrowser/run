@@ -1,0 +1,7 @@
+#!/bin/bash
+exec /usr/local/bin/filebrowser \
+    --noauth \
+    --address 0.0.0.0 \
+    --port 8080 \
+    --root /home/rstudio \
+    --database /etc/filebrowser.db
