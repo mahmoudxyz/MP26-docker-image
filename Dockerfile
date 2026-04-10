@@ -4,10 +4,21 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/opt/conda/envs/MP26_env/bin:/opt/conda/bin:$PATH"
 
 # ── System dependencies ────────────────────────────────────────────────────────
+# FIX: added libglpk40 (needed by igraph -> phangorn), libxml2-dev, libcurl4-openssl-dev,
+# libssl-dev (needed by many R packages), and the font/image libs needed by
+# phytools' plotting dependencies (systemfonts, textshaping, ragg, magick).
+# libgdal/libgeos/libproj are added because phytools soft-depends on sf for some
+# biogeographic functions and the install fails halfway through without them.
 RUN apt-get update && apt-get install -y \
     wget curl git nginx util-linux \
     mpi-default-bin mpi-default-dev \
     python3-pip bat miller \
+    libglpk40 libglpk-dev \
+    libxml2-dev libcurl4-openssl-dev libssl-dev \
+    libfontconfig1-dev libharfbuzz-dev libfribidi-dev \
+    libfreetype6-dev libpng-dev libtiff5-dev libjpeg-dev \
+    libmagick++-dev \
+    libgdal-dev libgeos-dev libproj-dev \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/batcat /usr/local/bin/bat
 
@@ -57,9 +68,35 @@ RUN /opt/conda/bin/mamba install -y -n MP26_env \
     && /opt/conda/bin/conda clean -afy
 
 # ── R packages ─────────────────────────────────────────────────────────────────
-RUN R -e "install.packages('BiocManager', repos='https://cloud.r-project.org')" && \
-    R -e "BiocManager::install(c('Biostrings','msa','apex'), ask=FALSE)" && \
-    R -e "install.packages(c('ape','seqinr','phangorn','phytools','geiger'), repos='https://cloud.r-project.org')"
+# FIX: split into separate steps and use stop(...) so a single failed package
+# fails the Docker build instead of being silently ignored. This is why
+# phytools was missing in the previous image — one of its deps failed quietly
+# during build and install.packages() just moved on.
+#
+# Also: install phytools BEFORE the verification step so any missing system
+# lib surfaces loudly here rather than at first-use by a student.
+RUN R -e "install.packages('BiocManager', repos='https://cloud.r-project.org'); \
+          if (!requireNamespace('BiocManager', quietly=TRUE)) stop('BiocManager install failed')"
+
+RUN R -e "BiocManager::install(c('Biostrings','msa','apex'), ask=FALSE, update=FALSE); \
+          for (p in c('Biostrings','msa','apex')) \
+            if (!requireNamespace(p, quietly=TRUE)) stop(paste('Bioconductor package', p, 'failed to install'))"
+
+RUN R -e "install.packages(c('ape','seqinr','phangorn','phytools','geiger'), \
+                           repos='https://cloud.r-project.org', \
+                           Ncpus=parallel::detectCores()); \
+          for (p in c('ape','seqinr','phangorn','phytools','geiger')) \
+            if (!requireNamespace(p, quietly=TRUE)) stop(paste('CRAN package', p, 'failed to install'))"
+
+# FIX: final sanity check — actually load every required package. If any of
+# them has a broken shared library (like phangorn needing libglpk), this will
+# fail the build here instead of at first student use.
+RUN R -e "pkgs <- c('BiocManager','Biostrings','msa','apex','ape','seqinr','phangorn','phytools','geiger'); \
+          for (p in pkgs) { \
+            message('Loading ', p); \
+            library(p, character.only=TRUE); \
+          }; \
+          message('All R packages load cleanly.')"
 
 # ── Clone course repo ──────────────────────────────────────────────────────────
 RUN git clone https://github.com/for-giobbe/MP26.git /home/rstudio/MP26 && \
